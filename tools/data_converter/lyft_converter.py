@@ -114,38 +114,68 @@ def _fill_trainval_infos(lyft,
     val_lyft_infos = []
 
     for sample in mmcv.track_iter_progress(lyft.sample):
-        lidar_token = sample['data']['LIDAR_TOP']
-        sd_rec = lyft.get('sample_data', sample['data']['LIDAR_TOP'])
-        cs_record = lyft.get('calibrated_sensor',
-                             sd_rec['calibrated_sensor_token'])
-        pose_record = lyft.get('ego_pose', sd_rec['ego_pose_token'])
-        abs_lidar_path, boxes, _ = lyft.get_sample_data(lidar_token)
-        # nuScenes devkit returns more convenient relative paths while
-        # lyft devkit returns absolute paths
-        abs_lidar_path = str(abs_lidar_path)  # absolute path
-        lidar_path = abs_lidar_path.split(f'{os.getcwd()}/')[-1]
-        # relative path
-
-        mmcv.check_file_exist(lidar_path)
-
         info = {
-            'lidar_path': lidar_path,
             'token': sample['token'],
-            'sweeps': [],
+            'lidars': dict(),
             'cams': dict(),
-            'lidar2ego_translation': cs_record['translation'],
-            'lidar2ego_rotation': cs_record['rotation'],
-            'ego2global_translation': pose_record['translation'],
-            'ego2global_rotation': pose_record['rotation'],
             'timestamp': sample['timestamp'],
         }
 
-        l2e_r = info['lidar2ego_rotation']
-        l2e_t = info['lidar2ego_translation']
-        e2g_r = info['ego2global_rotation']
-        e2g_t = info['ego2global_translation']
-        l2e_r_mat = Quaternion(l2e_r).rotation_matrix
-        e2g_r_mat = Quaternion(e2g_r).rotation_matrix
+        # obtain 3 lidar information per frame
+        lidar_types = [
+            'LIDAR_TOP',
+            'LIDAR_FRONT_RIGHT',
+            'LIDAR_FRONT_LEFT',
+        ]
+        for ldr in lidar_types:
+            # Some of samples might not have Right and Left Lidar
+            # Filter that out. TODO: See if we can filter that out 
+            # in DB SAMPLER
+            if ldr not in sample['data']: continue
+            lidar_token = sample['data'][ldr]
+            sd_rec = lyft.get('sample_data', lidar_token)
+            cs_record = lyft.get('calibrated_sensor',
+                                sd_rec['calibrated_sensor_token'])
+            pose_record = lyft.get('ego_pose', sd_rec['ego_pose_token'])
+            abs_lidar_path, boxes, _ = lyft.get_sample_data(lidar_token)
+            # nuScenes devkit returns more convenient relative paths while
+            # lyft devkit returns absolute paths
+            abs_lidar_path = str(abs_lidar_path)  # absolute path
+            lidar_path = abs_lidar_path.split(f'{os.getcwd()}/')[-1]
+            # relative path
+
+            mmcv.check_file_exist(lidar_path)
+    
+            lidar_info = {
+                'lidar_path': lidar_path,
+                'sample_data_token': sd_rec['token'],
+                'sweeps': [],
+                'lidar2ego_translation': cs_record['translation'],
+                'lidar2ego_rotation': cs_record['rotation'],
+                'ego2global_translation': pose_record['translation'],
+                'ego2global_rotation': pose_record['rotation'],
+                'timestamp': sd_rec['timestamp']
+            }
+
+            l2e_r = lidar_info['lidar2ego_rotation']
+            l2e_t = lidar_info['lidar2ego_translation']
+            e2g_r = lidar_info['ego2global_rotation']
+            e2g_t = lidar_info['ego2global_translation']
+            l2e_r_mat = Quaternion(l2e_r).rotation_matrix
+            e2g_r_mat = Quaternion(e2g_r).rotation_matrix
+
+            # obtain sweeps for a single key-frame
+            sweeps = []
+            while len(sweeps) < max_sweeps:
+                if not sd_rec['prev'] == '':
+                    sweep = obtain_sensor2top(lyft, sd_rec['prev'], l2e_t,
+                                            l2e_r_mat, e2g_t, e2g_r_mat, 'lidar')
+                    sweeps.append(sweep)
+                    sd_rec = lyft.get('sample_data', sd_rec['prev'])
+                else:
+                    break
+            lidar_info['sweeps'] = sweeps
+            info['lidars'].update({ldr: lidar_info})
 
         # obtain 6 image's information per frame
         camera_types = [
@@ -156,6 +186,13 @@ def _fill_trainval_infos(lyft,
             'CAM_BACK_LEFT',
             'CAM_BACK_RIGHT',
         ]
+        # obtain camera data from TOP lidar reference
+        l2e_r = info['lidars']['LIDAR_TOP']['lidar2ego_rotation']
+        l2e_t = info['lidars']['LIDAR_TOP']['lidar2ego_translation']
+        e2g_r = info['lidars']['LIDAR_TOP']['ego2global_rotation']
+        e2g_t = info['lidars']['LIDAR_TOP']['ego2global_translation']
+        l2e_r_mat = Quaternion(l2e_r).rotation_matrix
+        e2g_r_mat = Quaternion(e2g_r).rotation_matrix
         for cam in camera_types:
             cam_token = sample['data'][cam]
             cam_path, _, cam_intrinsic = lyft.get_sample_data(cam_token)
@@ -163,19 +200,6 @@ def _fill_trainval_infos(lyft,
                                          e2g_t, e2g_r_mat, cam)
             cam_info.update(cam_intrinsic=cam_intrinsic)
             info['cams'].update({cam: cam_info})
-
-        # obtain sweeps for a single key-frame
-        sd_rec = lyft.get('sample_data', sample['data']['LIDAR_TOP'])
-        sweeps = []
-        while len(sweeps) < max_sweeps:
-            if not sd_rec['prev'] == '':
-                sweep = obtain_sensor2top(lyft, sd_rec['prev'], l2e_t,
-                                          l2e_r_mat, e2g_t, e2g_r_mat, 'lidar')
-                sweeps.append(sweep)
-                sd_rec = lyft.get('sample_data', sd_rec['prev'])
-            else:
-                break
-        info['sweeps'] = sweeps
         # obtain annotation
         if not test:
             annotations = [

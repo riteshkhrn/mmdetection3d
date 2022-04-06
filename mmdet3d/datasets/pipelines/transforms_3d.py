@@ -514,7 +514,7 @@ class GlobalAlignment(object):
         rot_mat = axis_align_matrix[:3, :3]
         trans_vec = axis_align_matrix[:3, -1]
 
-        self._check_rot_mat(rot_mat)
+        # self._check_rot_mat(rot_mat)
         self._rot_points(input_dict, rot_mat)
         self._trans_points(input_dict, trans_vec)
 

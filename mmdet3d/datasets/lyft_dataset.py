@@ -2,12 +2,14 @@
 import os
 import tempfile
 from os import path as osp
+from functools import reduce
 
 import mmcv
 import numpy as np
 import pandas as pd
 from lyft_dataset_sdk.lyftdataset import LyftDataset as Lyft
 from lyft_dataset_sdk.utils.data_classes import Box as LyftBox
+from lyft_dataset_sdk.utils.geometry_utils import transform_matrix
 from pyquaternion import Quaternion
 
 from mmdet3d.core.evaluation.lyft_eval import lyft_eval
@@ -148,10 +150,12 @@ class LyftDataset(Custom3DDataset):
         info = self.data_infos[index]
 
         # standard protocol modified from SECOND.Pytorch
+        ldr = 'LIDAR_FRONT_LEFT'
+        ldr = 'LIDAR_TOP'
         input_dict = dict(
             sample_idx=info['token'],
-            pts_filename=info['lidar_path'],
-            sweeps=info['sweeps'],
+            pts_filename=info['lidars'][ldr]['lidar_path'],
+            sweeps=info['lidars'][ldr]['sweeps'],
             timestamp=info['timestamp'] / 1e6,
         )
 
@@ -182,7 +186,27 @@ class LyftDataset(Custom3DDataset):
         if not self.test_mode:
             annos = self.get_ann_info(index)
             input_dict['ann_info'] = annos
+        
+        # Homogeneous transform from ego car frame to reference frame
+        ref_from_car = transform_matrix(info['lidars']['LIDAR_TOP']['lidar2ego_translation'],
+                                        Quaternion(info['lidars']['LIDAR_TOP']['lidar2ego_rotation']),
+                                        inverse=True)
 
+        # Homogeneous transformation matrix from global to _current_ ego car frame
+        car_from_global = transform_matrix(info['lidars']['LIDAR_TOP']['ego2global_translation'],
+                                        Quaternion(info['lidars']['LIDAR_TOP']['ego2global_rotation']),
+                                        inverse=True)
+
+        global_from_car = transform_matrix(info['lidars'][ldr]['ego2global_translation'],
+                                        Quaternion(info['lidars'][ldr]['ego2global_rotation']),
+                                        inverse=False)
+
+        car_from_current = transform_matrix(info['lidars'][ldr]['lidar2ego_translation'],
+                                    Quaternion(info['lidars'][ldr]['lidar2ego_rotation']),
+                                    inverse=False)                       
+        # Fuse four transformation matrices into one and perform transform.
+        trans_matrix = reduce(np.dot, [ref_from_car, car_from_global, global_from_car, car_from_current])
+        input_dict['ann_info'] = dict(axis_align_matrix=trans_matrix)
         return input_dict
 
     def get_ann_info(self, index):
@@ -558,10 +582,10 @@ def lidar_lyft_box_to_global(info, boxes):
     box_list = []
     for box in boxes:
         # Move box to ego vehicle coord system
-        box.rotate(Quaternion(info['lidar2ego_rotation']))
-        box.translate(np.array(info['lidar2ego_translation']))
+        box.rotate(Quaternion(info['lidars']['LIDAR_TOP']['lidar2ego_rotation']))
+        box.translate(np.array(info['lidars']['LIDAR_TOP']['lidar2ego_translation']))
         # Move box to global coord system
-        box.rotate(Quaternion(info['ego2global_rotation']))
-        box.translate(np.array(info['ego2global_translation']))
+        box.rotate(Quaternion(info['lidars']['LIDAR_TOP']['ego2global_rotation']))
+        box.translate(np.array(info['lidars']['LIDAR_TOP']['ego2global_translation']))
         box_list.append(box)
     return box_list
