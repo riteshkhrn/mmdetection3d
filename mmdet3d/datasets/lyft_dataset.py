@@ -81,6 +81,7 @@ class LyftDataset(Custom3DDataset):
 
     def __init__(self,
                  ann_file,
+                 loading_pipeline=None,
                  pipeline=None,
                  data_root=None,
                  classes=None,
@@ -110,6 +111,8 @@ class LyftDataset(Custom3DDataset):
                 use_map=False,
                 use_external=False,
             )
+        if loading_pipeline is not None:
+            self.loading_pipeline = Compose(loading_pipeline)
 
     def load_annotations(self, ann_file):
         """Load annotations from ann_file.
@@ -128,7 +131,7 @@ class LyftDataset(Custom3DDataset):
         self.version = self.metadata['version']
         return data_infos
 
-    def get_data_info(self, index):
+    def get_data_info(self, index, ldr):
         """Get data info according to the given index.
 
         Args:
@@ -148,10 +151,9 @@ class LyftDataset(Custom3DDataset):
                 - ann_info (dict): annotation info
         """
         info = self.data_infos[index]
-
+        if ldr not in info['lidars']:
+            return None
         # standard protocol modified from SECOND.Pytorch
-        ldr = 'LIDAR_FRONT_LEFT'
-        ldr = 'LIDAR_TOP'
         input_dict = dict(
             sample_idx=info['token'],
             pts_filename=info['lidars'][ldr]['lidar_path'],
@@ -206,7 +208,10 @@ class LyftDataset(Custom3DDataset):
                                     inverse=False)                       
         # Fuse four transformation matrices into one and perform transform.
         trans_matrix = reduce(np.dot, [ref_from_car, car_from_global, global_from_car, car_from_current])
-        input_dict['ann_info'] = dict(axis_align_matrix=trans_matrix)
+        if self.test_mode:
+            input_dict['ann_info'] = dict(axis_align_matrix=trans_matrix)
+        else:
+            input_dict['ann_info'].update(dict(axis_align_matrix=trans_matrix))
         return input_dict
 
     def get_ann_info(self, index):
@@ -250,6 +255,67 @@ class LyftDataset(Custom3DDataset):
             gt_labels_3d=gt_labels_3d,
         )
         return anns_results
+
+    def prepare_train_data(self, index):
+        """Training data preparation.
+
+        Args:
+            index (int): Index for accessing the target data.
+
+        Returns:
+            dict: Training data dict of the corresponding index.
+        """
+        lidar_types = [
+            'LIDAR_TOP',
+            'LIDAR_FRONT_RIGHT',
+            'LIDAR_FRONT_LEFT',
+        ]
+        k = {}
+        for ldr in lidar_types:
+            input_dict = self.get_data_info(index, ldr)
+            if input_dict is None:
+                continue
+            self.pre_pipeline(input_dict)
+            k[ldr] = self.loading_pipeline(input_dict)
+        example = k['LIDAR_TOP']
+        example['points'] = example['points'].cat([k[ldr]['points']
+                                                  for ldr in k])
+        # Run through rest of pipeline
+        example = self.pipeline(example)
+        if self.filter_empty_gt and \
+                (example is None or
+                    ~(example['gt_labels_3d']._data != -1).any()):
+            return None
+        return example
+
+    def prepare_test_data(self, index):
+        """Prepare data for testing.
+
+        Args:
+            index (int): Index for accessing the target data.
+
+        Returns:
+            dict: Testing data dict of the corresponding index.
+        """
+        lidar_types = [
+            'LIDAR_TOP',
+            'LIDAR_FRONT_RIGHT',
+            'LIDAR_FRONT_LEFT',
+        ]
+        k = {}
+        for ldr in lidar_types:
+            input_dict = self.get_data_info(index, ldr)
+            if input_dict is None:
+                continue
+            self.pre_pipeline(input_dict)
+            k[ldr] = self.loading_pipeline(input_dict)
+        example = k['LIDAR_TOP']
+        # print(example['ann_info']['axis_align_matrix'])
+        example['points'] = example['points'].cat([k[ldr]['points']
+                                                  for ldr in k])
+        # Run through rest of pipeline
+        example = self.pipeline(example)
+        return example
 
     def _format_bbox(self, results, jsonfile_prefix=None):
         """Convert the results to the standard format.

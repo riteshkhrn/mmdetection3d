@@ -31,8 +31,8 @@ file_client_args = dict(backend='disk')
 #         './data/lyft/': 's3://lyft/lyft/',
 #         'data/lyft/': 's3://lyft/lyft/'
 #    }))
-# change of pipeline 
-train_pipeline = [
+# change of pipeline w.r.t to loading of side lidars
+loading_pipeline = [
     dict(
         type='LoadPointsFromFile',
         coord_type='LIDAR',
@@ -44,6 +44,8 @@ train_pipeline = [
         sweeps_num=10,
         file_client_args=file_client_args),
     dict(type='GlobalAlignment', rotation_axis=2),
+]
+train_pipeline = [
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(
         type='GlobalRotScaleTrans',
@@ -58,17 +60,6 @@ train_pipeline = [
     dict(type='Collect3D', keys=['points', 'gt_bboxes_3d', 'gt_labels_3d'])
 ]
 test_pipeline = [
-    dict(
-        type='LoadPointsFromFile',
-        coord_type='LIDAR',
-        load_dim=5,
-        use_dim=5,
-        file_client_args=file_client_args),
-    dict(
-        type='LoadPointsFromMultiSweeps',
-        sweeps_num=10,
-        file_client_args=file_client_args),
-    dict(type='GlobalAlignment', rotation_axis=2),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -94,17 +85,6 @@ test_pipeline = [
 # please keep its loading function consistent with test_pipeline (e.g. client)
 eval_pipeline = [
     dict(
-        type='LoadPointsFromFile',
-        coord_type='LIDAR',
-        load_dim=5,
-        use_dim=5,
-        file_client_args=file_client_args),
-    dict(
-        type='LoadPointsFromMultiSweeps',
-        sweeps_num=10,
-        file_client_args=file_client_args),
-    dict(type='GlobalAlignment', rotation_axis=2),
-    dict(
         type='DefaultFormatBundle3D',
         class_names=class_names,
         with_label=False),
@@ -112,12 +92,13 @@ eval_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=8,
     workers_per_gpu=2,
     train=dict(
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'lyft_infos_train.pkl',
+        loading_pipeline=loading_pipeline,
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -126,6 +107,7 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'lyft_infos_val.pkl',
+        loading_pipeline=loading_pipeline,
         pipeline=test_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -134,7 +116,13 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'lyft_infos_val.pkl',
+        loading_pipeline=loading_pipeline,
         pipeline=test_pipeline,
         classes=class_names,
         modality=input_modality,
         test_mode=True))
+# For Lyft dataset, we usually evaluate the model at the end of training.
+# Since the models are trained by 24 epochs by default, we set evaluation
+# interval to be 24. Please change the interval accordingly if you do not
+# use a default schedule.
+evaluation = dict(interval=24, pipeline=eval_pipeline)
