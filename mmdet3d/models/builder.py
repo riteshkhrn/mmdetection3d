@@ -81,6 +81,8 @@ def build_model(cfg, train_cfg=None, test_cfg=None):
     """
     if cfg.type in ['EncoderDecoder3D']:
         return build_segmentor(cfg, train_cfg=train_cfg, test_cfg=test_cfg)
+    elif cfg.type in ['CLOCFusion']:
+        return build_fusion_layer(cfg)
     else:
         return build_detector(cfg, train_cfg=train_cfg, test_cfg=test_cfg)
 

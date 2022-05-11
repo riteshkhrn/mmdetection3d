@@ -194,3 +194,40 @@ data = dict(
 # interval to be 24. Please change the interval accordingly if you do not
 # use a default schedule.
 evaluation = dict(interval=24, pipeline=eval_pipeline)
+
+# CLOC
+model = dict(test_cfg=dict(
+        pts=dict(
+            use_rotate_nms=True,
+            nms_across_levels=False,
+            nms_pre=1000,
+            nms_thr=0.0,
+            score_thr=0.0,
+            min_bbox_size=0,
+            max_num=300)))
+# CLOC configuration
+cloc_model = dict(
+    type='CLOCFusion',
+    num_classes=9,
+    bbox_coder=dict(type='DeltaXYZWLHRBBoxCoder', code_size=7),
+    anchor_generator=dict(
+            type='AlignedAnchor3DRangeGenerator',
+            ranges=[[-80, -80, -1.8, 80, 80, -1.8]],
+            scales=[1, 2, 4],
+            sizes=[
+                [2.5981, 0.8660, 1.],  # 1.5 / sqrt(3)
+                [1.7321, 0.5774, 1.],  # 1 / sqrt(3)
+                [1., 1., 1.],
+                [0.4, 0.4, 1],
+            ],
+            custom_values=[],
+            rotations=[0, 1.57],
+            reshape_out=True),
+    # model training and testing settings
+    train_cfg=dict(),
+    test_cfg=dict())
+
+cloc_runtime = dict(
+    epochs=15,
+    validation_interval=15,
+    log_dir='work_dirs/cloc_model/')
