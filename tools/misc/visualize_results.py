@@ -37,7 +37,7 @@ def main():
         # data loading pipeline for showing
         eval_pipeline = cfg.get('eval_pipeline', {})
         if eval_pipeline:
-            dataset.show(results, args.show_dir, pipeline=eval_pipeline)
+            dataset.show(results, args.show_dir, pipeline=eval_pipeline, show=True)
         else:
             dataset.show(results, args.show_dir)  # use default pipeline
     else:

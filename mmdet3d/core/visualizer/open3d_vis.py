@@ -450,11 +450,13 @@ class Visualizer(object):
         Args:
             save_path (str, optional): path to save image. Default: None.
         """
+        def move_forward(vis):
 
+            if save_path is not None:
+                vis.capture_screen_image(save_path)
+            vis.register_animation_callback(None)
+            vis.destroy_window()
+            return False
+        self.o3d_visualizer.register_animation_callback(move_forward)
         self.o3d_visualizer.run()
-
-        if save_path is not None:
-            self.o3d_visualizer.capture_screen_image(save_path)
-
-        self.o3d_visualizer.destroy_window()
         return
