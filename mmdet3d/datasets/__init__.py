@@ -18,7 +18,8 @@ from .pipelines import (AffineResize, BackgroundPointsFilter, GlobalAlignment,
                         ObjectSample, PointSample, PointShuffle,
                         PointsRangeFilter, RandomDropPointsColor, RandomFlip3D,
                         RandomJitterPoints, RandomShiftScale,
-                        VoxelBasedPointSampler)
+                        VoxelBasedPointSampler, LoadPointsFromSideLidars,
+                        CombineLidarsIntoSingleLidar)
 # yapf: enable
 from .s3dis_dataset import S3DISDataset, S3DISSegDataset
 from .scannet_dataset import (ScanNetDataset, ScanNetInstanceSegDataset,
@@ -41,5 +42,6 @@ __all__ = [
     'LoadPointsFromMultiSweeps', 'WaymoDataset', 'BackgroundPointsFilter',
     'VoxelBasedPointSampler', 'get_loading_pipeline', 'RandomDropPointsColor',
     'RandomJitterPoints', 'ObjectNameFilter', 'AffineResize',
-    'RandomShiftScale', 'LoadPointsFromDict'
+    'RandomShiftScale', 'LoadPointsFromDict', 'LoadPointsFromSideLidars',
+    'CombineLidarsIntoSingleLidar',
 ]

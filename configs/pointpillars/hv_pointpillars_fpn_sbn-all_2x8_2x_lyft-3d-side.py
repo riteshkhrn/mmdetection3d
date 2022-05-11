@@ -32,7 +32,22 @@ file_client_args = dict(backend='disk')
 #         'data/lyft/': 's3://lyft/lyft/'
 #    }))
 # change of pipeline w.r.t to loading of side lidars
-loading_pipeline = [
+side_lidars = ['LIDAR_FRONT_RIGHT', 'LIDAR_FRONT_LEFT']
+train_pipeline = [
+    dict(
+        type='LoadPointsFromFile',
+        coord_type='LIDAR',
+        load_dim=5,
+        use_dim=5,
+        file_client_args=file_client_args),
+    dict(
+        type='LoadPointsFromMultiSweeps',
+        sweeps_num=10,
+        file_client_args=file_client_args),
+    dict(
+        type='LoadPointsFromSideLidars',
+        lidars=side_lidars,
+        transforms=[
     dict(
         type='LoadPointsFromFile',
         coord_type='LIDAR',
@@ -44,8 +59,8 @@ loading_pipeline = [
         sweeps_num=10,
         file_client_args=file_client_args),
     dict(type='GlobalAlignment', rotation_axis=2),
-]
-train_pipeline = [
+        ]),
+    # dict(type='CombineLidarsIntoSingleLidar', lidars=side_lidars),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
     dict(
         type='GlobalRotScaleTrans',
@@ -56,10 +71,37 @@ train_pipeline = [
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='PointShuffle'),
-    dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['points', 'gt_bboxes_3d', 'gt_labels_3d'])
+    dict(type='DefaultFormatBundle3D', class_names=class_names, side_lidars=side_lidars),
+    dict(type='Collect3D', keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', f'{side_lidars[0]}_points'])
 ]
 test_pipeline = [
+    dict(
+        type='LoadPointsFromFile',
+        coord_type='LIDAR',
+        load_dim=5,
+        use_dim=5,
+        file_client_args=file_client_args),
+    dict(
+        type='LoadPointsFromMultiSweeps',
+        sweeps_num=10,
+        file_client_args=file_client_args),
+    dict(
+        type='LoadPointsFromSideLidars',
+        lidars=side_lidars,
+        transforms=[
+            dict(
+                type='LoadPointsFromFile',
+                coord_type='LIDAR',
+                load_dim=5,
+                use_dim=5,
+                file_client_args=file_client_args),
+            dict(
+                type='LoadPointsFromMultiSweeps',
+                sweeps_num=10,
+                file_client_args=file_client_args),
+            dict(type='GlobalAlignment', rotation_axis=2),
+        ]),
+    # dict(type='CombineLidarsIntoSingleLidar', lidars=side_lidars),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -77,18 +119,47 @@ test_pipeline = [
             dict(
                 type='DefaultFormatBundle3D',
                 class_names=class_names,
+                side_lidars=side_lidars,
                 with_label=False),
-            dict(type='Collect3D', keys=['points'])
+            dict(type='Collect3D', keys=['points', f'{side_lidars[0]}_points'])
         ])
 ]
 # construct a pipeline for data and gt loading in show function
 # please keep its loading function consistent with test_pipeline (e.g. client)
 eval_pipeline = [
     dict(
+        type='LoadPointsFromFile',
+        coord_type='LIDAR',
+        load_dim=5,
+        use_dim=5,
+        file_client_args=file_client_args),
+    dict(
+        type='LoadPointsFromMultiSweeps',
+        sweeps_num=10,
+        file_client_args=file_client_args),
+    dict(
+        type='LoadPointsFromSideLidars',
+        lidars=side_lidars,
+        transforms=[
+            dict(
+                type='LoadPointsFromFile',
+                coord_type='LIDAR',
+                load_dim=5,
+                use_dim=5,
+                file_client_args=file_client_args),
+            dict(
+                type='LoadPointsFromMultiSweeps',
+                sweeps_num=10,
+                file_client_args=file_client_args),
+            dict(type='GlobalAlignment', rotation_axis=2),
+        ]),
+    # dict(type='CombineLidarsIntoSingleLidar', lidars=side_lidars),
+    dict(
         type='DefaultFormatBundle3D',
         class_names=class_names,
+        side_lidars=side_lidars,
         with_label=False),
-    dict(type='Collect3D', keys=['points'])
+    dict(type='Collect3D', keys=['points', f'{side_lidars[0]}_points'])
 ]
 
 data = dict(
@@ -98,7 +169,6 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'lyft_infos_train.pkl',
-        loading_pipeline=loading_pipeline,
         pipeline=train_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -107,7 +177,6 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'lyft_infos_val.pkl',
-        loading_pipeline=loading_pipeline,
         pipeline=test_pipeline,
         classes=class_names,
         modality=input_modality,
@@ -116,7 +185,6 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         ann_file=data_root + 'lyft_infos_val.pkl',
-        loading_pipeline=loading_pipeline,
         pipeline=test_pipeline,
         classes=class_names,
         modality=input_modality,

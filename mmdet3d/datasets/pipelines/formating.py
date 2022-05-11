@@ -163,7 +163,8 @@ class Collect3D(object):
 
         data['img_metas'] = DC(img_metas, cpu_only=True)
         for key in self.keys:
-            data[key] = results[key]
+            if key in results:
+                data[key] = results[key]
         return data
 
     def __repr__(self):
@@ -188,11 +189,12 @@ class DefaultFormatBundle3D(DefaultFormatBundle):
     - gt_labels: (1)to tensor, (2)to DataContainer
     """
 
-    def __init__(self, class_names, with_gt=True, with_label=True):
+    def __init__(self, class_names, side_lidars=None, with_gt=True, with_label=True):
         super(DefaultFormatBundle3D, self).__init__()
         self.class_names = class_names
         self.with_gt = with_gt
         self.with_label = with_label
+        self.side_lidars = side_lidars
 
     def __call__(self, results):
         """Call function to transform and format common fields in results.
@@ -209,6 +211,12 @@ class DefaultFormatBundle3D(DefaultFormatBundle):
             assert isinstance(results['points'], BasePoints)
             results['points'] = DC(results['points'].tensor)
 
+        if self.side_lidars:
+            for ldr in self.side_lidars:
+                if ldr in results:
+                    assert isinstance(results[ldr]['points'], BasePoints)
+                    results[f'{ldr}_points'] = DC(results[ldr]['points'].tensor)
+        
         for key in ['voxels', 'coors', 'voxel_centers', 'num_points']:
             if key not in results:
                 continue

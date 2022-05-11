@@ -4,6 +4,7 @@ import numpy as np
 
 from mmdet3d.core.points import BasePoints, get_points_type
 from mmdet.datasets.builder import PIPELINES
+from mmdet.datasets.pipelines import Compose
 from mmdet.datasets.pipelines import LoadAnnotations, LoadImageFromFile
 
 
@@ -237,6 +238,31 @@ class LoadPointsFromMultiSweeps(object):
         """str: Return a string that describes the module."""
         return f'{self.__class__.__name__}(sweeps_num={self.sweeps_num})'
 
+@PIPELINES.register_module()
+class LoadPointsFromSideLidars(object):
+    """Load Points From Side Lidar.
+
+    Load points from side lidars.
+
+    Args:
+        lidars ([]): List of side lidars to include.
+        transforms ([]): Transorms to apply on lidars including loading
+    """
+    def __init__(self, lidars, transforms):
+        self.lidars = lidars
+        self.transforms = Compose(transforms)
+    def __call__(self, results):
+        for ldr in self.lidars:
+            if ldr in results:
+                results[ldr] = self.transforms(results[ldr])
+        return results
+
+    def __repr__(self):
+        """str: Return a string that describes the module."""
+        repr_str = f'{self.__class__.__name__}'
+        repr_str += f'(transforms={self.transforms})'
+        repr_str += f'(lidars={self.lidars})'
+        return repr_str
 
 @PIPELINES.register_module()
 class PointSegClassMapping(object):

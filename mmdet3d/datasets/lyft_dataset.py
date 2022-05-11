@@ -81,7 +81,6 @@ class LyftDataset(Custom3DDataset):
 
     def __init__(self,
                  ann_file,
-                 loading_pipeline=None,
                  pipeline=None,
                  data_root=None,
                  classes=None,
@@ -111,8 +110,6 @@ class LyftDataset(Custom3DDataset):
                 use_map=False,
                 use_external=False,
             )
-        if loading_pipeline is not None:
-            self.loading_pipeline = Compose(loading_pipeline)
 
     def load_annotations(self, ann_file):
         """Load annotations from ann_file.
@@ -131,7 +128,7 @@ class LyftDataset(Custom3DDataset):
         self.version = self.metadata['version']
         return data_infos
 
-    def get_data_info(self, index, ldr):
+    def get_data_info(self, index):
         """Get data info according to the given index.
 
         Args:
@@ -151,13 +148,11 @@ class LyftDataset(Custom3DDataset):
                 - ann_info (dict): annotation info
         """
         info = self.data_infos[index]
-        if ldr not in info['lidars']:
-            return None
         # standard protocol modified from SECOND.Pytorch
         input_dict = dict(
             sample_idx=info['token'],
-            pts_filename=info['lidars'][ldr]['lidar_path'],
-            sweeps=info['lidars'][ldr]['sweeps'],
+            pts_filename=info['lidars']['LIDAR_TOP']['lidar_path'],
+            sweeps=info['lidars']['LIDAR_TOP']['sweeps'],
             timestamp=info['timestamp'] / 1e6,
         )
 
@@ -189,29 +184,39 @@ class LyftDataset(Custom3DDataset):
             annos = self.get_ann_info(index)
             input_dict['ann_info'] = annos
         
-        # Homogeneous transform from ego car frame to reference frame
-        ref_from_car = transform_matrix(info['lidars']['LIDAR_TOP']['lidar2ego_translation'],
-                                        Quaternion(info['lidars']['LIDAR_TOP']['lidar2ego_rotation']),
-                                        inverse=True)
+        # Add the info for side lidars
+        if 'LIDAR_FRONT_LEFT' not in info['lidars']:
+            return input_dict
+        
+        for ldr in ['LIDAR_FRONT_LEFT', 'LIDAR_FRONT_RIGHT']:
+            side_lidar_input_dict = dict(
+                sample_idx=info['token'],
+                pts_filename=info['lidars'][ldr]['lidar_path'],
+                sweeps=info['lidars'][ldr]['sweeps'],
+                timestamp=info['timestamp'] / 1e6,
+            )
+            # Homogeneous transform from ego car frame to reference frame
+            ref_from_car = transform_matrix(info['lidars']['LIDAR_TOP']['lidar2ego_translation'],
+                                            Quaternion(info['lidars']['LIDAR_TOP']['lidar2ego_rotation']),
+                                            inverse=True)
 
-        # Homogeneous transformation matrix from global to _current_ ego car frame
-        car_from_global = transform_matrix(info['lidars']['LIDAR_TOP']['ego2global_translation'],
-                                        Quaternion(info['lidars']['LIDAR_TOP']['ego2global_rotation']),
-                                        inverse=True)
+            # Homogeneous transformation matrix from global to _current_ ego car frame
+            car_from_global = transform_matrix(info['lidars']['LIDAR_TOP']['ego2global_translation'],
+                                            Quaternion(info['lidars']['LIDAR_TOP']['ego2global_rotation']),
+                                            inverse=True)
 
-        global_from_car = transform_matrix(info['lidars'][ldr]['ego2global_translation'],
-                                        Quaternion(info['lidars'][ldr]['ego2global_rotation']),
-                                        inverse=False)
+            global_from_car = transform_matrix(info['lidars'][ldr]['ego2global_translation'],
+                                            Quaternion(info['lidars'][ldr]['ego2global_rotation']),
+                                            inverse=False)
 
-        car_from_current = transform_matrix(info['lidars'][ldr]['lidar2ego_translation'],
-                                    Quaternion(info['lidars'][ldr]['lidar2ego_rotation']),
-                                    inverse=False)                       
-        # Fuse four transformation matrices into one and perform transform.
-        trans_matrix = reduce(np.dot, [ref_from_car, car_from_global, global_from_car, car_from_current])
-        if self.test_mode:
-            input_dict['ann_info'] = dict(axis_align_matrix=trans_matrix)
-        else:
-            input_dict['ann_info'].update(dict(axis_align_matrix=trans_matrix))
+            car_from_current = transform_matrix(info['lidars'][ldr]['lidar2ego_translation'],
+                                        Quaternion(info['lidars'][ldr]['lidar2ego_rotation']),
+                                        inverse=False)                       
+            # Fuse four transformation matrices into one and perform transform.
+            trans_matrix = reduce(np.dot, [ref_from_car, car_from_global, global_from_car, car_from_current])
+            
+            side_lidar_input_dict['ann_info'] = dict(axis_align_matrix=trans_matrix)
+            input_dict[ldr] = side_lidar_input_dict
         return input_dict
 
     def get_ann_info(self, index):
@@ -255,67 +260,6 @@ class LyftDataset(Custom3DDataset):
             gt_labels_3d=gt_labels_3d,
         )
         return anns_results
-
-    def prepare_train_data(self, index):
-        """Training data preparation.
-
-        Args:
-            index (int): Index for accessing the target data.
-
-        Returns:
-            dict: Training data dict of the corresponding index.
-        """
-        lidar_types = [
-            'LIDAR_TOP',
-            'LIDAR_FRONT_RIGHT',
-            'LIDAR_FRONT_LEFT',
-        ]
-        k = {}
-        for ldr in lidar_types:
-            input_dict = self.get_data_info(index, ldr)
-            if input_dict is None:
-                continue
-            self.pre_pipeline(input_dict)
-            k[ldr] = self.loading_pipeline(input_dict)
-        example = k['LIDAR_TOP']
-        example['points'] = example['points'].cat([k[ldr]['points']
-                                                  for ldr in k])
-        # Run through rest of pipeline
-        example = self.pipeline(example)
-        if self.filter_empty_gt and \
-                (example is None or
-                    ~(example['gt_labels_3d']._data != -1).any()):
-            return None
-        return example
-
-    def prepare_test_data(self, index):
-        """Prepare data for testing.
-
-        Args:
-            index (int): Index for accessing the target data.
-
-        Returns:
-            dict: Testing data dict of the corresponding index.
-        """
-        lidar_types = [
-            'LIDAR_TOP',
-            'LIDAR_FRONT_RIGHT',
-            'LIDAR_FRONT_LEFT',
-        ]
-        k = {}
-        for ldr in lidar_types:
-            input_dict = self.get_data_info(index, ldr)
-            if input_dict is None:
-                continue
-            self.pre_pipeline(input_dict)
-            k[ldr] = self.loading_pipeline(input_dict)
-        example = k['LIDAR_TOP']
-        # print(example['ann_info']['axis_align_matrix'])
-        example['points'] = example['points'].cat([k[ldr]['points']
-                                                  for ldr in k])
-        # Run through rest of pipeline
-        example = self.pipeline(example)
-        return example
 
     def _format_bbox(self, results, jsonfile_prefix=None):
         """Convert the results to the standard format.
@@ -547,7 +491,7 @@ class LyftDataset(Custom3DDataset):
             if 'pts_bbox' in result.keys():
                 result = result['pts_bbox']
             data_info = self.data_infos[i]
-            pts_path = data_info['lidar_path']
+            pts_path = data_info['lidars']['LIDAR_TOP']['lidar_path']
             file_name = osp.split(pts_path)[-1].split('.')[0]
             points = self._extract_data(i, pipeline, 'points').numpy()
             points = Coord3DMode.convert_point(points, Coord3DMode.LIDAR,
@@ -560,7 +504,7 @@ class LyftDataset(Custom3DDataset):
             show_pred_bboxes = Box3DMode.convert(pred_bboxes, Box3DMode.LIDAR,
                                                  Box3DMode.DEPTH)
             show_result(points, show_gt_bboxes, show_pred_bboxes, out_dir,
-                        file_name, show)
+                        file_name, show, snapshot=show)
 
     def json2csv(self, json_path, csv_savepath):
         """Convert the json file to csv format for submission.
