@@ -48,17 +48,17 @@ train_pipeline = [
         type='LoadPointsFromSideLidars',
         lidars=side_lidars,
         transforms=[
-    dict(
-        type='LoadPointsFromFile',
-        coord_type='LIDAR',
-        load_dim=5,
-        use_dim=5,
-        file_client_args=file_client_args),
-    dict(
-        type='LoadPointsFromMultiSweeps',
-        sweeps_num=10,
-        file_client_args=file_client_args),
-    dict(type='GlobalAlignment', rotation_axis=2),
+            dict(
+                type='LoadPointsFromFile',
+                coord_type='LIDAR',
+                load_dim=5,
+                use_dim=5,
+                file_client_args=file_client_args),
+            dict(
+                type='LoadPointsFromMultiSweeps',
+                sweeps_num=10,
+                file_client_args=file_client_args),
+            dict(type='GlobalAlignment', rotation_axis=2),
         ]),
     # dict(type='CombineLidarsIntoSingleLidar', lidars=side_lidars),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True),
@@ -72,7 +72,7 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='PointShuffle'),
     dict(type='DefaultFormatBundle3D', class_names=class_names, side_lidars=side_lidars),
-    dict(type='Collect3D', keys=['points', 'gt_bboxes_3d', 'gt_labels_3d', f'{side_lidars[0]}_points'])
+    dict(type='Collect3D', keys=['points', 'gt_bboxes_3d', 'gt_labels_3d'])
 ]
 test_pipeline = [
     dict(
@@ -121,7 +121,7 @@ test_pipeline = [
                 class_names=class_names,
                 side_lidars=side_lidars,
                 with_label=False),
-            dict(type='Collect3D', keys=['points', f'{side_lidars[0]}_points'])
+            dict(type='Collect3D', keys=['points'])
         ])
 ]
 # construct a pipeline for data and gt loading in show function
@@ -159,7 +159,7 @@ eval_pipeline = [
         class_names=class_names,
         side_lidars=side_lidars,
         with_label=False),
-    dict(type='Collect3D', keys=['points', f'{side_lidars[0]}_points'])
+    dict(type='Collect3D', keys=['points'])
 ]
 
 data = dict(

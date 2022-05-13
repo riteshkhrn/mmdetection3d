@@ -211,7 +211,7 @@ class LyftDataset(Custom3DDataset):
 
             car_from_current = transform_matrix(info['lidars'][ldr]['lidar2ego_translation'],
                                         Quaternion(info['lidars'][ldr]['lidar2ego_rotation']),
-                                        inverse=False)                       
+                                        inverse=False)
             # Fuse four transformation matrices into one and perform transform.
             trans_matrix = reduce(np.dot, [ref_from_car, car_from_global, global_from_car, car_from_current])
             
