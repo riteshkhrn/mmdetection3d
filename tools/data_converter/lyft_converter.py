@@ -137,7 +137,7 @@ def _fill_trainval_infos(lyft,
             cs_record = lyft.get('calibrated_sensor',
                                 sd_rec['calibrated_sensor_token'])
             pose_record = lyft.get('ego_pose', sd_rec['ego_pose_token'])
-            abs_lidar_path, boxes, _ = lyft.get_sample_data(lidar_token)
+            abs_lidar_path, _, _ = lyft.get_sample_data(lidar_token)
             # nuScenes devkit returns more convenient relative paths while
             # lyft devkit returns absolute paths
             abs_lidar_path = str(abs_lidar_path)  # absolute path
@@ -202,6 +202,7 @@ def _fill_trainval_infos(lyft,
             info['cams'].update({cam: cam_info})
         # obtain annotation
         if not test:
+            _, boxes, _ = lyft.get_sample_data(sample['data']['LIDAR_TOP'])
             annotations = [
                 lyft.get('sample_annotation', token)
                 for token in sample['anns']

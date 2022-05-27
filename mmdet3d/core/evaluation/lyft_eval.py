@@ -12,7 +12,7 @@ from mmcv.utils import print_log
 from terminaltables import AsciiTable
 
 
-def load_lyft_gts(lyft, data_root, eval_split, logger=None):
+def load_lyft_gts(lyft, sample_tokens_pred, data_root, eval_split, logger=None):
     """Loads ground truth boxes from database.
 
     Args:
@@ -25,31 +25,31 @@ def load_lyft_gts(lyft, data_root, eval_split, logger=None):
     Returns:
         list[dict]: List of annotation dictionaries.
     """
-    split_scenes = mmcv.list_from_file(
-        osp.join(data_root, f'{eval_split}.txt'))
+    # split_scenes = mmcv.list_from_file(
+    #     osp.join(data_root, f'{eval_split}.txt'))
 
-    # Read out all sample_tokens in DB.
-    sample_tokens_all = [s['token'] for s in lyft.sample]
-    assert len(sample_tokens_all) > 0, 'Error: Database has no samples!'
+    # # Read out all sample_tokens in DB.
+    # sample_tokens_all = [s['token'] for s in lyft.sample]
+    # assert len(sample_tokens_all) > 0, 'Error: Database has no samples!'
 
-    if eval_split == 'test':
-        # Check that you aren't trying to cheat :)
-        assert len(lyft.sample_annotation) > 0, \
-            'Error: You are trying to evaluate on the test set \
-             but you do not have the annotations!'
+    # if eval_split == 'test':
+    #     # Check that you aren't trying to cheat :)
+    #     assert len(lyft.sample_annotation) > 0, \
+    #         'Error: You are trying to evaluate on the test set \
+    #          but you do not have the annotations!'
 
-    sample_tokens = []
-    for sample_token in sample_tokens_all:
-        scene_token = lyft.get('sample', sample_token)['scene_token']
-        scene_record = lyft.get('scene', scene_token)
-        if scene_record['name'] in split_scenes:
-            sample_tokens.append(sample_token)
+    # sample_tokens = []
+    # for sample_token in sample_tokens_all:
+    #     scene_token = lyft.get('sample', sample_token)['scene_token']
+    #     scene_record = lyft.get('scene', scene_token)
+    #     if scene_record['name'] in split_scenes:
+    #         sample_tokens.append(sample_token)
 
     all_annotations = []
 
     print_log('Loading ground truth annotations...', logger=logger)
     # Load annotations and filter predictions and annotations.
-    for sample_token in mmcv.track_iter_progress(sample_tokens):
+    for sample_token in mmcv.track_iter_progress(sample_tokens_pred):
         sample = lyft.get('sample', sample_token)
         sample_annotation_tokens = sample['anns']
         for sample_annotation_token in sample_annotation_tokens:
@@ -85,7 +85,7 @@ def load_lyft_predictions(res_path):
     all_preds = []
     for sample_token in predictions.keys():
         all_preds.extend(predictions[sample_token])
-    return all_preds
+    return all_preds, predictions.keys()
 
 
 def lyft_eval(lyft, data_root, res_path, eval_set, output_dir, logger=None):
@@ -104,8 +104,8 @@ def lyft_eval(lyft, data_root, res_path, eval_set, output_dir, logger=None):
         dict[str, float]: The evaluation results.
     """
     # evaluate by lyft metrics
-    gts = load_lyft_gts(lyft, data_root, eval_set, logger)
-    predictions = load_lyft_predictions(res_path)
+    predictions, tokens = load_lyft_predictions(res_path)
+    gts = load_lyft_gts(lyft, tokens, data_root, eval_set, logger)
 
     class_names = get_class_names(gts)
     print('Calculating mAP@0.5:0.95...')
