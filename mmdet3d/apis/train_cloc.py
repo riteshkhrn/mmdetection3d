@@ -5,6 +5,7 @@ import time
 import torch.optim as optim
 import mmcv
 import torch
+from torch.utils.tensorboard import SummaryWriter
 from mmcv.image import tensor2imgs
 import torch.distributed as dist
 from mmcv.runner import get_dist_info
@@ -39,6 +40,7 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
     batch_size = train_data_loader.batch_size
     side_lidar = 'LIDAR_FRONT_RIGHT_points'
     optimizer = optim.Adam(cloc_model.parameters(), lr=0.001, weight_decay=0.01)
+    writer = SummaryWriter(cfg.cloc_runtime.log_dir + 'tf_logs')
     for epoch in range(cfg.cloc_runtime.epochs):
         # set the mode for cloc model
         cloc_model.train()
@@ -47,30 +49,35 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
         time.sleep(2)  # This line can prevent deadlock problem in some cases.
         step = 0
         for data in train_data_loader:
-            if side_lidar not in data:
-                continue
-            with torch.no_grad():
-                # test_time_aug will format the data to be a list so create a dummy list for train
-                result_3d = inf_model(return_loss=False, rescale=True,
-                                    **dict(points=[data['points']], img_metas=[data['img_metas']]))
-                result_3d_side = inf_model(return_loss=False, rescale=True, side=True,
-                                    **dict(points=[data[side_lidar]], img_metas=[data['img_metas']]))
-            optimizer.zero_grad()
-            # TODO: why gt_bboxes_3d and img_metas is nested list?
-            pred_clses = cloc_model(result_3d, result_3d_side, data['img_metas'].data[0])
-            loss = cloc_model.loss(pred_clses, result_3d, data['gt_bboxes_3d'].data[0],
-                                data['gt_labels_3d'].data[0], data['img_metas'].data[0])
-            loss.backward()
-            optimizer.step()
-            step += 1
-            # print statistics
-            running_loss += loss
-            if step % 50 == 0:
-                print(f"step {step}, total_steps {len(dataset)/batch_size}, cls_loss {(running_loss/50).detach().cpu().numpy()}")
-                running_loss = 0
-        print(f'Epoch {epoch}, steps {step}')
+            if side_lidar in data:
+                with torch.no_grad():
+                    # test_time_aug will format the data to be a list so create a dummy list for train
+                    result_3d = inf_model(return_loss=False, rescale=True,
+                                        **dict(points=[data['points']], img_metas=[data['img_metas']]))
+                    result_3d_side = inf_model(return_loss=False, rescale=True, side=True,
+                                        **dict(points=[data[side_lidar]], img_metas=[data['img_metas']]))
+                optimizer.zero_grad()
+                # TODO: why gt_bboxes_3d and img_metas is nested list?
+                pred_clses = cloc_model(result_3d, result_3d_side, data['img_metas'].data[0])
+                loss = cloc_model.loss(pred_clses, result_3d, data['gt_bboxes_3d'].data[0],
+                                    data['gt_labels_3d'].data[0], data['img_metas'].data[0])
+                loss.backward()
+                optimizer.step()
+                step += 1
+                # print statistics
+                running_loss += loss
+                if step % 50 == 0:
+                    running_loss = (running_loss/50).detach().cpu().numpy()
+                    print(f"\nEpoch {epoch}/{cfg.cloc_runtime.epochs}, Steps {step}/{len(dataset)/batch_size}, cls_loss {running_loss}")
+                    writer.add_scalar('Loss/train', running_loss, step)
+                    running_loss = 0
+            else:
+                print('No Side Lidar found, have you offset the dataset properly')
+                print('If you have offset the dataset, check the config file  if the side lidars are collected')
+                print('If this is the intended behaviour it will still work. This will go through the dataset untill side lidars are found')
+
         if (epoch + 1) % cfg.cloc_runtime.validation_interval == 0:
-            print('Saving the model.. checkpoint')
+            print('\nSaving the model.. checkpoint')
             log_dir = cfg.cloc_runtime.log_dir
             if not osp.exists(log_dir):
                 os.makedirs(log_dir)
@@ -80,7 +87,7 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
             'optimizer_state_dict': optimizer.state_dict(),
             }, cfg.cloc_runtime.log_dir + 'cloc_model.pt')
 
-            print('Doing Evaluation...')
+            print('\nDoing Evaluation...')
             # set the mode for cloc model
             cloc_model.eval()
             results = []    

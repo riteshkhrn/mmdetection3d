@@ -126,7 +126,7 @@ class LyftDataset(Custom3DDataset):
         data_infos = data_infos[::self.load_interval]
         self.metadata = data['metadata']
         self.version = self.metadata['version']
-        return data_infos
+        return data_infos[15498:] if not self.test_mode else data_infos
 
     def get_data_info(self, index):
         """Get data info according to the given index.
