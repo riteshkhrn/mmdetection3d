@@ -164,18 +164,24 @@ class CLOCFusion(nn.Module):
                  num_classes=9,
                  bbox_coder=dict(type='DeltaXYZWLHRBBoxCoder', code_size=7),
                  anchor_generator=dict(
-                          type='AlignedAnchor3DRangeGenerator',
-                          ranges=[[-80, -80, -1.8, 80, 80, -1.8]],
-                          scales=[1, 2, 4],
-                          sizes=[
-                              [2.5981, 0.8660, 1.],  # 1.5 / sqrt(3)
-                              [1.7321, 0.5774, 1.],  # 1 / sqrt(3)
-                              [1., 1., 1.],
-                              [0.4, 0.4, 1],
-                          ],
-                          custom_values=[],
-                          rotations=[0, 1.57],
-                          reshape_out=True),
+                    type='AlignedAnchor3DRangeGenerator',
+                    ranges=[[-80, -80, -1.8, 80, 80, -1.8]],
+                    scales=[1, 2, 4],
+                    sizes=[
+                        [2.5981, 0.8660, 1.],  # 1.5 / sqrt(3)
+                        [1.7321, 0.5774, 1.],  # 1 / sqrt(3)
+                        [1., 1., 1.],
+                        [0.4, 0.4, 1],
+                    ],
+                    custom_values=[],
+                    rotations=[0, 1.57],
+                    reshape_out=True),
+                  loss_cls=dict(
+                    type='FocalLoss',
+                    use_sigmoid=True,
+                    gamma=2.0,
+                    alpha=0.25,
+                    loss_weight=1.0),
                  train_cfg=None,
                  test_cfg=None):
         super(CLOCFusion, self).__init__()
@@ -195,8 +201,10 @@ class CLOCFusion(nn.Module):
             nn.ReLU(),
             nn.Conv2d(36,1,1),
         )
-        self.maxpool = nn.Sequential(nn.MaxPool2d([300,1],1),)
+        self.max_side_detections = 100
+        self.maxpool = nn.Sequential(nn.MaxPool2d([self.max_side_detections,1],1),)
         self.focal_loss = SigmoidFocalClassificationLoss()
+        self.loss_cls = build_loss(loss_cls)
 
 
     def forward(self, mlvl_det_3d, result_3d_side=None, img_metas=None):
@@ -225,6 +233,7 @@ class CLOCFusion(nn.Module):
         device = mlvl_cls_scores[0].device
         mlvl_anchors = self.anchor_generator.grid_anchors(featmap_sizes, device=device)
         mlvl_anchors = [anchor.reshape(-1, self.box_code_size) for anchor in mlvl_anchors]
+        done = False
 
         def fuse_single_sample(cls_score, bbox_pred, anchors, single_3d_side, img_meta):
             # Assuming all of inputs present
@@ -242,28 +251,67 @@ class CLOCFusion(nn.Module):
             bboxes_side = single_3d_side['pts_bbox']['boxes_3d'].to(device)
             scores_side = single_3d_side['pts_bbox']['scores_3d'].to(device)
             labels_side = single_3d_side['pts_bbox']['labels_3d'].to(device)
-            cls_score_side = nn.functional.one_hot(labels_side, num_classes=self.num_classes) * scores_side.view(-1, 1)
-            overlaps = BaseInstance3DBoxes.overlaps(bboxes_side, bboxes) #kXN
-            indices = torch.nonzero(overlaps, as_tuple=True)
-            features = torch.zeros(len(indices[0]), self.num_classes, 5,
+
+            if len(bboxes_side) >= self.max_side_detections:
+              total_bboxes_side = bboxes_side[:self.max_side_detections]
+              total_scores_side = scores_side[:self.max_side_detections]
+              total_labels_side = labels_side[:self.max_side_detections]
+            else:
+              pad_bboxes_side = cls_score.new_full((self.max_side_detections - len(bboxes_side),
+                                                    self.box_code_size), 0)
+              pad_bboxes_side = img_meta['box_type_3d'](pad_bboxes_side, box_dim=self.box_code_size)
+              total_bboxes_side = bboxes_side.cat([bboxes_side, pad_bboxes_side])
+              total_scores_side = cls_score.new_full((self.max_side_detections,), 0)
+              total_scores_side[:len(bboxes_side)] = scores_side
+              total_labels_side = labels_side.new_full((self.max_side_detections,), self.num_classes)
+              total_labels_side[:len(bboxes_side)] = labels_side
+
+
+            cls_score_side = nn.functional.one_hot(total_labels_side,
+                                                   num_classes=self.num_classes+1) * total_scores_side.view(-1, 1) # kXc+1
+            cls_score_side = cls_score_side[:, :self.num_classes] # kXc
+            nonlocal done
+            if not done:
+              print('side boxes: ', total_bboxes_side)
+              print('class score sides ', cls_score_side)
+              done = True
+            overlaps = BaseInstance3DBoxes.overlaps(total_bboxes_side, bboxes) #kXN
+            # print('overlaps :', overlaps)
+            matched_indices = torch.nonzero(overlaps, as_tuple=True)
+            # bboxes which do not have match
+            unmatched_indices = torch.nonzero(torch.amax(overlaps, dim=0) == 0, as_tuple=True)
+            # total indices = matched + unmatched
+            total_indices = (torch.cat([matched_indices[0],
+                                        matched_indices[0].new_full(unmatched_indices[0].shape,
+                                                                    self.max_side_detections-1)]),
+                             torch.cat([matched_indices[1], unmatched_indices[0]]))
+            features = torch.zeros(total_indices[0].shape[0], self.num_classes, 5,
                                    dtype=cls_score.dtype, device=device) #pXcX5
              # IOU, overlaps would be (p,) after reshaping (p,1), broadcasted to (p, c)
-            features[:, :, 0] = overlaps[indices].reshape(-1, 1)
-            features[:, :, 1] = cls_score_side[indices[0]] # score pXc
-            features[:, :, 2] = cls_score[indices[1]] # score pXc
-            features[:, :, 3] = torch.norm(bboxes_side.bottom_center[indices[0]], dim=1).reshape(-1, 1) # distance
-            features[:, :, 4] = torch.norm(bboxes.bottom_center[indices[1]], dim=1).reshape(-1, 1) # distance
+            features[:matched_indices[0].shape[0], :, 0] = overlaps[matched_indices].reshape(-1, 1)
+            features[:matched_indices[0].shape[0], :, 1] = cls_score_side[matched_indices[0]] # score pXc
+            features[:matched_indices[0].shape[0], :, 2] = cls_score[matched_indices[1]] # score pXc
+            features[:matched_indices[0].shape[0], :, 3] = torch.norm(total_bboxes_side.bottom_center[matched_indices[0]], dim=1).reshape(-1, 1) # distance
+            features[:matched_indices[0].shape[0], :, 4] = torch.norm(bboxes.bottom_center[matched_indices[1]], dim=1).reshape(-1, 1) # distance
+            # write for the unmatched indices
+            features[matched_indices[0].shape[0]:, :, 0] = -10
+            features[matched_indices[0].shape[0]:, :, 1] = -10 # score pXc
+            features[matched_indices[0].shape[0]:, :, 2] = cls_score[unmatched_indices[0]] # score pXc
+            features[matched_indices[0].shape[0]:, :, 3] = -10 # distance
+            features[matched_indices[0].shape[0]:, :, 4] = torch.norm(bboxes.bottom_center[unmatched_indices[0]], dim=1).reshape(-1, 1) # distance
             features = features.unsqueeze(0).permute(0,3,2,1) # 1x5xcxp
             x = self.fuse_2d_3d(features) # 1x1xcxp
-            out = torch.zeros(self.num_classes, len(bboxes_side), len(bboxes), 
-                               dtype=features.dtype, device=features.device) # kxNxc
+            out = torch.zeros(self.num_classes, self.max_side_detections, len(bboxes), 
+                               dtype=features.dtype, device=features.device) # cxkxN
             out[:,:,:] = -9999999
-            out[:, indices[0],indices[1]] = x[0, 0, :, :]
+            out[:, total_indices[0],total_indices[1]] = x[0, 0, :, :]
             x = self.maxpool(out) # cX1xN
             x = x.squeeze() # cxN
             x = x.permute(1, 0) # Nxc
+            # print('output before', x)
             x = x.reshape(original_shape[1], original_shape[2], original_shape[0]) # fs[0]xfs[1]x(c*base_anchors)
             x = x.permute(2, 0, 1) # original_shape
+            # print('output ', x)
             return x
             
         def fuse_single_level(slvl_cls_scores, slvl_bbox_preds, slvl_anchors):
@@ -275,7 +323,7 @@ class CLOCFusion(nn.Module):
                                    result_3d_side[i],
                                    img_metas[i])
             pred_clses.append(x.unsqueeze(0)) # create batch dim here
-          return [torch.cat(pred_clses, dim=0)] #bxNxc, making it a list cause of zip in multi_apply
+          return [torch.cat(pred_clses, dim=0)] #bxfs[0]xfs[1]x(c*base_anchors), making it a list cause of zip in multi_apply
 
         pred_score = multi_apply(
                       fuse_single_level,
@@ -284,7 +332,7 @@ class CLOCFusion(nn.Module):
                       mlvl_anchors)
         mlvl_pred_score = pred_score[0]
         assert len(mlvl_cls_scores) == len(mlvl_pred_score)
-        return mlvl_pred_score #list[(bxNxc)]
+        return mlvl_pred_score #list[(bxfs[0]xfs[1]x(c*base_anchors))]
 
     def loss(self, mlvl_pred_score=None,
                    mlvl_det_3d=None,
@@ -312,29 +360,39 @@ class CLOCFusion(nn.Module):
         device = mlvl_cls_scores[0].device
         mlvl_anchors = self.anchor_generator.grid_anchors(featmap_sizes, device=device)
         mlvl_anchors = [anchor.reshape(-1, self.box_code_size) for anchor in mlvl_anchors]
+        done = False
 
         def loss_single_sample(pred_score, bbox_pred, anchors, gt_bboxes, gt_labels, img_meta):
+            # print('class score', pred_score)
             pred_score = pred_score.permute(1, 2,
                                           0).reshape(-1, self.num_classes)
+            # print('class score after ', pred_score)
             bbox_pred = bbox_pred.permute(1, 2,
                                           0).reshape(-1, self.box_code_size)
             bboxes = self.bbox_coder.decode(anchors, bbox_pred)
             bboxes = img_meta['box_type_3d'](bboxes, box_dim=self.box_code_size)
+            nonlocal done
+            if not done:
+              print('GT ', gt_bboxes)
+              done = True
             overlaps = BaseInstance3DBoxes.overlaps(gt_bboxes.to(device), bboxes) #gXN
             iou_amax = torch.amax(overlaps, dim=0) #N,
             iou_amax_ind = torch.argmax(overlaps, dim=0) #N,
             # create one hot of ground truth labels
-            gt_scores = nn.functional.one_hot(gt_labels.to(device), num_classes=self.num_classes) #gXc
+            # gt_scores = nn.functional.one_hot(gt_labels.to(device), num_classes=self.num_classes) #gXc
             # take N, indices for iou_amax out of gt_scores
-            target_scores = gt_scores[iou_amax_ind] #NXc
-            target_scale = ((iou_amax >= 0.7)*1).reshape(-1, 1) #NX1, 1 > 0.7 else 0
-            target_scores = target_scores * target_scale
+            # target_scores = gt_scores[iou_amax_ind] #NXc
+            # target_scale = ((iou_amax >= 0.7)*1).reshape(-1, 1) #NX1, 1 > 0.7 else 0
+            # target_scores = target_scores * target_scale
+            target_scores = gt_labels.to(device)[iou_amax_ind]
+            target_scores[iou_amax <= 0.5] = self.num_classes # mark it as background
             positives = ((iou_amax >= 0.7)*1).reshape(-1, 1).type(iou_amax.dtype).to(device) #NX1
             negatives = ((iou_amax <= 0.5)*1).reshape(-1, 1).type(iou_amax.dtype).to(device) #NX1
             cls_weights = negatives + positives #NX1
             pos_normalizer = positives.sum(1, keepdim=True).type(iou_amax.dtype) #1X1
             cls_weights /= torch.clamp(pos_normalizer, min=1.0)
-            sample_loss = self.focal_loss._compute_loss(pred_score, target_scores, cls_weights).sum()
+            # sample_loss = self.focal_loss._compute_loss(pred_score, target_scores, cls_weights).sum()
+            sample_loss = self.loss_cls(pred_score, target_scores, cls_weights, avg_factor=1)
             return sample_loss
 
         def loss_single_level(slvl_pred_scores, slvl_bbox_preds, slvl_anchors):
@@ -354,4 +412,4 @@ class CLOCFusion(nn.Module):
                     mlvl_pred_score,
                     mlvl_bbox_preds,
                     mlvl_anchors)
-        return sum(_loss.mean() for _loss in result[0])        
+        return sum(_loss.mean() for _loss in result[0])

@@ -40,6 +40,9 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
     batch_size = train_data_loader.batch_size
     side_lidar = 'LIDAR_FRONT_RIGHT_points'
     optimizer = optim.Adam(cloc_model.parameters(), lr=0.001, weight_decay=0.01)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.003, 
+                                                    steps_per_epoch=len(train_data_loader),
+                                                    epochs=10, div_factor=10.0)
     writer = SummaryWriter(cfg.cloc_runtime.log_dir + 'tf_logs')
     for epoch in range(cfg.cloc_runtime.epochs):
         # set the mode for cloc model
@@ -57,19 +60,21 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
                     result_3d_side = inf_model(return_loss=False, rescale=True, side=True,
                                         **dict(points=[data[side_lidar]], img_metas=[data['img_metas']]))
                 optimizer.zero_grad()
-                # TODO: why gt_bboxes_3d and img_metas is nested list?
+                # Collate function(num_gpus, sample_per_gpu) -> DC([#num_gpus[#sample_per_gpu]])
+                # hence need to unstack it
                 pred_clses = cloc_model(result_3d, result_3d_side, data['img_metas'].data[0])
                 loss = cloc_model.loss(pred_clses, result_3d, data['gt_bboxes_3d'].data[0],
                                     data['gt_labels_3d'].data[0], data['img_metas'].data[0])
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
                 step += 1
                 # print statistics
                 running_loss += loss
                 if step % 50 == 0:
                     running_loss = (running_loss/50).detach().cpu().numpy()
-                    print(f"\nEpoch {epoch}/{cfg.cloc_runtime.epochs}, Steps {step}/{len(dataset)/batch_size}, cls_loss {running_loss}")
-                    writer.add_scalar('Loss/train', running_loss, step)
+                    print(f"\nEpoch {epoch}/{cfg.cloc_runtime.epochs}, Steps {step}/{len(dataset)/batch_size}, cls_loss {running_loss}, lr {scheduler.get_last_lr()}")
+                    writer.add_scalar('Loss/train', running_loss, step + epoch*len(dataset)/batch_size)
                     running_loss = 0
             else:
                 print('No Side Lidar found, have you offset the dataset properly')
@@ -90,7 +95,7 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
             print('\nDoing Evaluation...')
             # set the mode for cloc model
             cloc_model.eval()
-            results = []    
+            results = []
             dataset = test_data_loader.dataset
             if rank == 0:
                 prog_bar = mmcv.ProgressBar(len(dataset))
@@ -102,7 +107,8 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
                                             **dict(points=data['points'], img_metas=data['img_metas']))
                         result_3d_side = inf_model(return_loss=False, rescale=True, side=True,
                                             **dict(points=data[side_lidar], img_metas=data['img_metas']))
-                    # TODO: why gt_bboxes_3d and img_metas is nested list?
+                    # Collate function(num_gpus, sample_per_gpu) -> DC([#num_gpus[#sample_per_gpu]])
+                    # hence need to unstack it
                     pred_clses = cloc_model(result_3d, result_3d_side, data['img_metas'][0].data[0])
                     # loss = cloc_model.loss(pred_clses, result_3d, data['gt_bboxes_3d'][0].data[0],
                     #                        data['gt_labels_3d'][0].data[0], data['img_metas'][0].data[0])           
@@ -115,7 +121,8 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
                         final_3d = result_3d
                 with torch.no_grad():
                     bbox_list = inf_model.module.pts_bbox_head.get_bboxes(
-                        *final_3d, data['img_metas'][0].data[0], rescale=True)
+                        *final_3d, data['img_metas'][0].data[0], cfg=cfg.cloc_eval_cfg.pts,
+                        rescale=True)
                     bbox_results = [
                         bbox3d2result(bboxes, scores, labels)
                         for bboxes, scores, labels in bbox_list
@@ -123,10 +130,7 @@ def train(inf_model, cloc_model, train_data_loader, test_data_loader,
                 result = [dict() for i in range(len(data['img_metas'][0].data[0]))]
                 for result_dict, pts_bbox in zip(result, bbox_results):
                     result_dict['pts_bbox'] = pts_bbox
-                # # encode mask results
-                # if isinstance(result[0], tuple):
-                #     result = [(bbox_results, encode_mask_results(mask_results))
-                #                 for bbox_results, mask_results in result]
+
                 results.extend(result)
                 if rank == 0:
                     batch_size = len(result)

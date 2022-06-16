@@ -72,7 +72,7 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='PointShuffle'),
     dict(type='DefaultFormatBundle3D', class_names=class_names, side_lidars=side_lidars),
-    dict(type='Collect3D', keys=['points', 'gt_bboxes_3d', 'gt_labels_3d'])
+    dict(type='Collect3D', keys=['points', 'LIDAR_FRONT_RIGHT_points','gt_bboxes_3d', 'gt_labels_3d'])
 ]
 test_pipeline = [
     dict(
@@ -121,7 +121,7 @@ test_pipeline = [
                 class_names=class_names,
                 side_lidars=side_lidars,
                 with_label=False),
-            dict(type='Collect3D', keys=['points'])
+            dict(type='Collect3D', keys=['points', 'LIDAR_FRONT_RIGHT_points'])
         ])
 ]
 # construct a pipeline for data and gt loading in show function
@@ -159,7 +159,7 @@ eval_pipeline = [
         class_names=class_names,
         side_lidars=side_lidars,
         with_label=False),
-    dict(type='Collect3D', keys=['points'])
+    dict(type='Collect3D', keys=['points', 'LIDAR_FRONT_RIGHT_points'])
 ]
 
 data = dict(
@@ -197,14 +197,14 @@ evaluation = dict(interval=24, pipeline=eval_pipeline)
 
 # CLOC
 model = dict(test_cfg=dict(
-        pts=dict(
-            use_rotate_nms=True,
-            nms_across_levels=False,
-            nms_pre=1000,
-            nms_thr=0.0,
-            score_thr=0.0,
-            min_bbox_size=0,
-            max_num=300)))
+                pts=dict(
+                    use_rotate_nms=True,
+                    nms_across_levels=False,
+                    nms_pre=1000,
+                    nms_thr=0.2,
+                    score_thr=0.05,
+                    min_bbox_size=0,
+                    max_num=500)))
 # CLOC configuration
 cloc_model = dict(
     type='CLOCFusion',
@@ -227,7 +227,17 @@ cloc_model = dict(
     train_cfg=dict(),
     test_cfg=dict())
 
+cloc_eval_cfg=dict(
+    pts=dict(
+        use_rotate_nms=True,
+        nms_across_levels=False,
+        nms_pre=1000,
+        nms_thr=0.2,
+        score_thr=0.05,
+        min_bbox_size=0,
+        max_num=500))
+
 cloc_runtime = dict(
-    epochs=15,
-    validation_interval=15,
-    log_dir='work_dirs/cloc_model/')
+    epochs=10,
+    validation_interval=10,
+    log_dir='work_dirs/cloc_model_v4/')
